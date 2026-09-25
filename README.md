@@ -44,7 +44,7 @@ git config user.name 'Jaxel Rojas Lopez'
 git config user.email 'jrojaslopez@microsoft.com'
 
 .\scripts\setup.ps1 `
-    -MetadataPath 'C:\Users\Ada\.config\git-acs-sign\metadata.json' `
+    -MetadataPath 'C:\Users\jaxel\.config\git-acs-sign\metadata.json' `
     -Principal 'jrojaslopez@microsoft.com'
 
 'Artifact Signing example' | Set-Content example.txt
