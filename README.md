@@ -1,25 +1,48 @@
-# Git commit signing with Azure Artifact Signing
+# Sign Git commits with Azure Artifact Signing
 
-`git-acs-sign` uses the
+Hey, so you want to sign Git commits with a key that lives in Azure? Cool.
+
+`git-acs-sign` is a small helper that uses
 [Artifact Signing SDK for Go](https://github.com/Jaxelr/artifact-signing-sdk-go)
-to Git's SSH signing interface. Git supplies the commit payload, `git-acs-sign`
-constructs an OpenSSH SSHSIG digest, and Azure Artifact Signing signs that digest
-with the certificate profile's private key.
+to sign commits with Azure Artifact Signing.
 
-The helper works on Windows and Linux. It supports:
+It plugs into Git's SSH signing support, which means you keep using Git like
+you normally would:
 
-- automatic or explicit signed Git commits;
-- Git/OpenSSH signature verification;
-- local verification of every Artifact Signing response before Git receives it;
-- inspection of the exact X.509 leaf certificate returned for a signed commit; and
-- local certificate receipts that are never added to source control.
+```text
+git add .
+git commit -m "My signed commit"
+```
 
-## Quick-start example
+No weird commit flow. No private key sitting on your laptop. It works on Windows
+and Linux, and it can show you the certificate Artifact Signing used for a
+commit.
 
-The following example configures a repository, creates a signed commit, verifies
-the signature, and displays the certificate used to produce it.
+## Stuff you'll need
 
-First, create a metadata file for an existing Artifact Signing certificate profile:
+- Go 1.25 or newer
+- Git 2.34 or newer
+- OpenSSH with `ssh-keygen -Y` support
+- Azure CLI
+- An Artifact Signing account and certificate profile
+- Permission to sign with that profile
+
+Give these a quick check before we get going:
+
+```text
+go version
+git --version
+ssh-keygen -Y check-novalidate
+az version
+```
+
+The `ssh-keygen` command may complain that you didn't give it a signature.
+That's okay—we're only checking that the `-Y` commands exist.
+
+## Tell it where your signing profile lives
+
+The helper needs three things: the Artifact Signing endpoint, account, and
+certificate profile. Put them in a JSON file:
 
 ```json
 {
@@ -29,377 +52,179 @@ First, create a metadata file for an existing Artifact Signing certificate profi
 }
 ```
 
-Sign in to the Azure tenant that contains the Artifact Signing resource:
+Nothing secret is hiding in here. This file doesn't contain credentials or a
+private key; it just points at your Artifact Signing resource.
 
-```text
-az login --tenant <tenant-id>
-```
+You can keep it wherever you like. Here are a couple of sensible spots:
 
-### Windows example
-
-From the `git-acs-sign` repository:
-
-```powershell
-git config user.name 'Jaxel Rojas Lopez'
-git config user.email 'jrojaslopez@microsoft.com'
-
-.\scripts\setup.ps1 `
-    -MetadataPath 'C:\Users\jaxel\.config\git-acs-sign\metadata.json' `
-    -Principal 'jrojaslopez@microsoft.com'
-
-'Artifact Signing example' | Set-Content example.txt
-git add example.txt
-git commit -m 'Add signed example'
-
-git verify-commit --raw HEAD
-
-$signer = git config --local --get gpg.ssh.program
-& $signer inspect HEAD
-```
-
-### Linux example
-
-From the `git-acs-sign` repository:
-
-```bash
-git config user.name "Jaxel Rojas Lopez"
-git config user.email "jrojaslopez@microsoft.com"
-
-chmod +x scripts/setup.sh
-./scripts/setup.sh \
-  "$HOME/.config/git-acs-sign/metadata.json" \
-  "jrojaslopez@microsoft.com"
-
-printf '%s\n' 'Artifact Signing example' > example.txt
-git add example.txt
-git commit -m 'Add signed example'
-
-git verify-commit --raw HEAD
-
-signer="$(git config --local --get gpg.ssh.program)"
-"$signer" inspect HEAD
-```
-
-Successful verification prints a result similar to:
-
-```text
-Good "git" signature for jrojaslopez@microsoft.com with RSA key SHA256:...
-```
-
-Certificate inspection then reports the commit ID, Artifact Signing account and
-profile, subject, issuer, serial number, SHA-256 thumbprint, validity period,
-public-key details, and key usages.
-
-## How it works
-
-1. Git invokes `git-acs-sign` through `gpg.ssh.program`.
-2. The helper hashes the Git payload according to the SSHSIG format.
-3. `DefaultAzureCredential` authenticates to Azure.
-4. Artifact Signing signs the SSHSIG digest with `RS256`.
-5. The helper verifies the returned signature against the returned X.509 certificate.
-6. The helper emits a standard SSH signature for Git.
-7. Git verifies that signature with OpenSSH and the local allowed-signers file.
-
-Git stores the SSH public key and SSH signature in the commit. The full X.509
-certificate is stored separately in a local receipt under
-`.git/artifact-signing/receipts`.
-
-## Prerequisites
-
-Install the following on Windows or Linux:
-
-- Go 1.25 or later;
-- Git 2.34 or later;
-- OpenSSH `ssh-keygen` with `-Y` signing support;
-- Azure CLI; and
-- access to an Azure Artifact Signing account and certificate profile.
-
-Confirm the tools are available:
-
-```text
-go version
-git --version
-ssh-keygen -Y check-novalidate
-az version
-```
-
-`ssh-keygen -Y check-novalidate` prints usage or a missing-argument error when
-SSH signature support is installed. An "unknown option" or "unsupported operation"
-response can indicate an older OpenSSH installation.
-
-## Create the Artifact Signing metadata file
-
-Create a local JSON file with the Artifact Signing endpoint, account, and
-certificate profile:
-
-```json
-{
-  "Endpoint": "https://<region>.codesigning.azure.net",
-  "CodeSigningAccountName": "<account-name>",
-  "CertificateProfileName": "<profile-name>"
-}
-```
-
-This file identifies the signing resource; it does not contain a private key.
-Do not add environment-specific metadata files to source control.
-
-Example locations:
-
-- Windows: `C:\tools\AcsUnitTest\metadata.scus.json`
+- Windows: `C:\Users\jaxel\.config\git-acs-sign\metadata.json`
 - Linux: `$HOME/.config/git-acs-sign/metadata.json`
 
-On Linux, restrict access to the file:
+On Linux, you can limit access to the file:
 
 ```bash
 chmod 600 "$HOME/.config/git-acs-sign/metadata.json"
 ```
 
-## Authenticate to Azure
+## Log in to Azure real quick
 
-The helper uses Azure Identity's `DefaultAzureCredential`. For local interactive
-use, sign in with Azure CLI:
-
-```text
-az login
-az account show
-```
-
-If the Artifact Signing resource belongs to a specific tenant:
+For local use, an Azure CLI login does the trick:
 
 ```text
 az login --tenant <tenant-id>
+az account show
 ```
 
-The authenticated identity must have permission to sign with the configured
-Artifact Signing certificate profile.
+The helper uses `DefaultAzureCredential`, so it'll pick up that Azure CLI login.
 
-## Configure Git identity
+## Windows folks, start here
 
-Set the name and email that should appear on commits. The same email is used as
-the default SSH signing principal:
+Clone this repository, open PowerShell in it, and configure your Git identity:
 
-```text
+```powershell
+git config user.name 'Jaxel Rojas Lopez'
+git config user.email 'jrojaslopez@microsoft.com'
+```
+
+Now let setup do its thing:
+
+```powershell
+.\scripts\setup.ps1 `
+    -MetadataPath 'C:\Users\jaxel\.config\git-acs-sign\metadata.json' `
+    -Principal 'jrojaslopez@microsoft.com'
+```
+
+If PowerShell blocks the script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 `
+    -MetadataPath 'C:\Users\jaxel\.config\git-acs-sign\metadata.json' `
+    -Principal 'jrojaslopez@microsoft.com'
+```
+
+The script builds the helper under `.git\artifact-signing`, makes sure Azure
+actually lets you sign, and wires up this repository so commits are signed
+automatically.
+
+## Linux folks, you're up
+
+Clone this repository, open a shell in it, and configure your Git identity:
+
+```bash
 git config user.name "Jaxel Rojas Lopez"
 git config user.email "jrojaslopez@microsoft.com"
 ```
 
-Omit `--global` to configure only the current repository. Add `--global` if the
-identity should be the default for all repositories.
-
-## Windows setup
-
-From the root of this repository, use the PowerShell setup script:
-
-```powershell
-.\scripts\setup.ps1 `
-    -MetadataPath 'C:\tools\AcsUnitTest\metadata.scus.json' `
-    -Principal 'jrojaslopez@microsoft.com'
-```
-
-The script builds the helper into `.git\artifact-signing`, validates Azure access,
-retrieves the current signing certificate, and configures this repository.
-
-If the PowerShell execution policy blocks the script:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 `
-    -MetadataPath 'C:\tools\AcsUnitTest\metadata.scus.json' `
-    -Principal 'jrojaslopez@microsoft.com'
-```
-
-### Configure another repository on Windows
-
-Install the helper:
-
-```powershell
-go install .\cmd\git-acs-sign
-$signer = Join-Path (go env GOPATH) 'bin\git-acs-sign.exe'
-```
-
-Then change to the target repository and configure it:
-
-```powershell
-Set-Location 'C:\src\target-repository'
-& $signer setup `
-    --metadata 'C:\tools\AcsUnitTest\metadata.scus.json' `
-    --principal 'jrojaslopez@microsoft.com' `
-    --program $signer
-```
-
-## Linux setup
-
-Make the Bash setup script executable after cloning:
+Now run setup:
 
 ```bash
 chmod +x scripts/setup.sh
-```
 
-Run it from the root of this repository:
-
-```bash
 ./scripts/setup.sh \
   "$HOME/.config/git-acs-sign/metadata.json" \
   "jrojaslopez@microsoft.com"
 ```
 
-The metadata path can alternatively come from `ACS_METADATA_PATH`:
+You can also use `ACS_METADATA_PATH`:
 
 ```bash
 export ACS_METADATA_PATH="$HOME/.config/git-acs-sign/metadata.json"
 ./scripts/setup.sh "$ACS_METADATA_PATH" "jrojaslopez@microsoft.com"
 ```
 
-### Configure another repository on Linux
+Same deal as Windows: it builds the helper under `.git/artifact-signing`, tries
+a real signing operation, and configures the current repository.
 
-Install the helper:
+## Okay, let's sign something
+
+Make a small change and commit it normally:
+
+### Windows
+
+```powershell
+'Artifact Signing example' | Set-Content example.txt
+git add example.txt
+git commit -m 'Add signed example'
+```
+
+### Linux
 
 ```bash
-go install ./cmd/git-acs-sign
-export PATH="$(go env GOPATH)/bin:$PATH"
-signer="$(command -v git-acs-sign)"
+printf '%s\n' 'Artifact Signing example' > example.txt
+git add example.txt
+git commit -m 'Add signed example'
 ```
 
-Then change to the target repository and configure it:
+Setup turns on `commit.gpgSign`, so that's it—no need to remember `-S` every
+time.
 
-```bash
-cd ~/src/target-repository
-"$signer" setup \
-  --metadata "$HOME/.config/git-acs-sign/metadata.json" \
-  --principal "jrojaslopez@microsoft.com" \
-  --program "$signer"
-```
-
-## Configuration performed by setup
-
-Setup writes repository-local configuration similar to:
-
-```text
-gpg.format=ssh
-gpg.ssh.program=<absolute-path-to-git-acs-sign>
-gpg.ssh.allowedSignersFile=<git-dir>/artifact-signing/allowed-signers
-user.signingKey=<git-dir>/artifact-signing/signing-key.pub
-commit.gpgSign=true
-artifactsigning.metadataFile=<absolute-path-to-metadata>
-artifactsigning.principal=<email-or-principal>
-```
-
-Review it on either platform:
-
-```text
-git config --local --get-regexp "^(artifactsigning|gpg\.|user\.signingkey|commit\.gpgsign)"
-```
-
-The executable, public key, allowed-signers file, receipts, and metadata path are
-stored under `.git` or `.git/config`; they are not committed.
-
-## Sign commits
-
-Setup enables automatic signing:
-
-```text
-git add .
-git commit -m "Describe the change"
-```
-
-To sign only selected commits:
+If you only want to sign some commits:
 
 ```text
 git config --local commit.gpgSign false
-git commit -S -m "Describe the change"
+git commit -S -m "Sign only this commit"
 ```
 
-To restore automatic signing:
+## But did it actually sign?
 
-```text
-git config --local commit.gpgSign true
-```
-
-## Review and verify a Git signature
-
-Display Git's verification result:
+Yep. Here's the quick check:
 
 ```text
 git log -1 --show-signature
 ```
 
-Perform an explicit verification and check the exit status.
+You should see something like:
 
-Windows PowerShell:
+```text
+Good "git" signature for jrojaslopez@microsoft.com with RSA key SHA256:...
+```
+
+Want Git to be extra explicit? Ask it to verify the commit directly.
+
+### Windows
 
 ```powershell
 git verify-commit --raw HEAD
 $LASTEXITCODE
 ```
 
-Linux Bash:
+### Linux
 
 ```bash
 git verify-commit --raw HEAD
 echo $?
 ```
 
-A valid signature produces output similar to:
+Exit code `0` means the signature is valid.
 
-```text
-Good "git" signature for jrojaslopez@microsoft.com with RSA key SHA256:...
-```
-
-and exits with status `0`.
-
-Inspect the signature embedded directly in the commit:
+Want to see the signature tucked inside the commit?
 
 ```text
 git cat-file commit HEAD
 ```
 
-The object contains a `gpgsig -----BEGIN SSH SIGNATURE-----` block. Because the
-signature covers the commit object, changing its tree, parent, author, committer,
-timestamp, or message invalidates the signature.
+Look for the `BEGIN SSH SIGNATURE` block.
 
-Review the trusted SSH key fingerprint.
+## Show me the certificate
 
-Windows PowerShell:
+This is the fun part. The helper keeps a local receipt for each signature, so
+you can look up the exact certificate Artifact Signing returned.
 
-```powershell
-$key = git config --local --path --get user.signingKey
-ssh-keygen -lf $key
-```
-
-Linux Bash:
-
-```bash
-key="$(git config --local --path --get user.signingKey)"
-ssh-keygen -lf "$key"
-```
-
-The fingerprint must match the key shown by `git verify-commit`.
-
-## Review the certificate used for a commit
-
-Each signing operation records the exact returned leaf certificate in a local
-receipt keyed by the SHA-256 digest of the SSH signature. The `inspect` command:
-
-1. asks Git to verify the commit;
-2. extracts the embedded SSH signature;
-3. locates the matching local receipt;
-4. confirms that the receipt fingerprint matches its certificate; and
-5. displays the certificate and Artifact Signing profile properties.
-
-Windows PowerShell:
+### Windows
 
 ```powershell
 $signer = git config --local --get gpg.ssh.program
 & $signer inspect HEAD
 ```
 
-Linux Bash:
+### Linux
 
 ```bash
 signer="$(git config --local --get gpg.ssh.program)"
 "$signer" inspect HEAD
 ```
 
-Replace `HEAD` with any local commit ID or revision:
+Looking for a different commit? Replace `HEAD` with any commit or revision:
 
 ```text
 git-acs-sign inspect <commit>
@@ -407,26 +232,79 @@ git-acs-sign inspect <commit>
 
 The output includes:
 
-- commit ID and Git verification result;
-- receipt path and recording time;
-- Artifact Signing endpoint, account, and certificate profile;
-- certificate subject and issuer;
-- serial number;
-- SHA-256 certificate thumbprint;
-- SSH public-key fingerprint;
-- validity period;
-- public-key type and size;
-- certificate signature algorithm;
-- key usage; and
-- extended key usage and additional EKU object identifiers.
+- Artifact Signing account and profile
+- Certificate subject and issuer
+- Serial number
+- SHA-256 thumbprint
+- SSH key fingerprint
+- Valid-from and valid-until dates
+- Public key type and size
+- Signature algorithm
+- Key usage and extended key usage
 
-Receipts are local evidence and are not embedded in Git. If a repository is cloned
-on another machine, Git can still verify the SSH signature when the public key is
-trusted, but `inspect` requires the original matching receipt.
+Receipts live under `.git/artifact-signing/receipts`. They stay local and aren't
+committed.
 
-## Local files and source control
+If you clone the repository on another machine, Git can still verify the commit
+as long as the signing key is trusted there. The certificate details need the
+matching receipt from the machine that created the signature.
 
-Setup creates:
+## Bring it to another repository
+
+Install the helper straight from GitHub:
+
+```text
+go install github.com/jaxelr/git-azure-artifact-signing/cmd/git-acs-sign@latest
+```
+
+### Windows
+
+```powershell
+$signer = Join-Path (go env GOPATH) 'bin\git-acs-sign.exe'
+Set-Location 'C:\src\target-repository'
+
+& $signer setup `
+    --metadata 'C:\Users\jaxel\.config\git-acs-sign\metadata.json' `
+    --principal 'jrojaslopez@microsoft.com' `
+    --program $signer
+```
+
+### Linux
+
+```bash
+export PATH="$(go env GOPATH)/bin:$PATH"
+signer="$(command -v git-acs-sign)"
+cd ~/src/target-repository
+
+"$signer" setup \
+  --metadata "$HOME/.config/git-acs-sign/metadata.json" \
+  --principal "jrojaslopez@microsoft.com" \
+  --program "$signer"
+```
+
+Setup is repository-local, so run it once in each repository you want to sign.
+
+## So, what did setup change?
+
+Nothing mysterious. It writes local Git settings that look like this:
+
+```text
+gpg.format=ssh
+gpg.ssh.program=<path-to-git-acs-sign>
+gpg.ssh.allowedSignersFile=<git-dir>/artifact-signing/allowed-signers
+user.signingKey=<git-dir>/artifact-signing/signing-key.pub
+commit.gpgSign=true
+artifactsigning.metadataFile=<path-to-metadata>
+artifactsigning.principal=<email>
+```
+
+You can review them with:
+
+```text
+git config --local --get-regexp "^(artifactsigning|gpg\.|user\.signingkey|commit\.gpgsign)"
+```
+
+Setup also creates:
 
 ```text
 .git/artifact-signing/
@@ -437,112 +315,88 @@ Setup creates:
     └── <signature-sha256>.json
 ```
 
-These files are inside `.git` and cannot be accidentally committed with the
-repository working tree. The metadata file remains at the path supplied during
-setup.
+Everything lives under `.git`, safely out of your normal commits.
 
-## Updating the helper
+## A tiny bit of nerdy detail
 
-After pulling a newer version, rerun the platform setup command. It rebuilds or
-replaces the helper and preserves the repository-local configuration model.
+Here's the whole signing flow without turning this into a cryptography textbook:
 
-Windows:
+1. Git gives `git-acs-sign` the commit data.
+2. The helper builds the SSH signature digest.
+3. Artifact Signing signs that digest.
+4. The helper checks the returned signature against the returned certificate.
+5. Git gets a normal SSH signature and stores it in the commit.
 
-```powershell
-.\scripts\setup.ps1 `
-    -MetadataPath 'C:\tools\AcsUnitTest\metadata.scus.json' `
-    -Principal 'jrojaslopez@microsoft.com'
-```
+The important bit: the private key stays in Azure. This project never downloads
+or writes it.
 
-Linux:
+Git verifies the SSH key in the commit. It doesn't validate the full X.509
+certificate chain. The local receipt is what ties that SSH signature back to the
+certificate returned during signing.
 
-```bash
-./scripts/setup.sh \
-  "$HOME/.config/git-acs-sign/metadata.json" \
-  "jrojaslopez@microsoft.com"
-```
+Receipts are useful evidence, but they aren't RFC 3161 timestamps.
 
-## Troubleshooting
+## When things get weird
 
-### Git reports that signing failed
+### Git says signing failed
 
-Confirm the configured executable exists:
+Check that the configured helper exists:
 
 ```text
 git config --local --get gpg.ssh.program
 ```
 
-Then rerun setup to rebuild it.
+If it doesn't, rerun setup.
 
-### Azure authentication fails
+### Azure doesn't like your login
 
-Check the active identity and tenant:
+Check the current account:
 
 ```text
 az account show
 ```
 
-If necessary:
+Sign in again if needed:
 
 ```text
 az logout
 az login --tenant <tenant-id>
 ```
 
-### Git reports "No principal matched"
+### Git says "No principal matched"
 
-Confirm that the commit is being verified with the expected email:
+Check that these values use the same email:
 
 ```text
 git config user.email
 git config --local --get artifactsigning.principal
 ```
 
-Rerun setup with the correct principal.
+Rerun setup with the right principal if they don't match.
 
-### `inspect` cannot find a receipt
+### `inspect` can't find a receipt
 
-Receipts exist only for signing operations performed by a receipt-enabled build on
-the current machine. Git signature verification is still available:
+The receipt may have been created on another machine, or the commit may predate
+receipt support. You can still check the Git signature:
 
 ```text
 git verify-commit --raw <commit>
 ```
 
-### The certificate has expired
+### The certificate is expired
 
-The current integration verifies the cryptographic SSH signature and reports the
-certificate validity period. It does not timestamp the Git signature or perform
-historical X.509 chain validation. The receipt shows which certificate was returned
-at signing time, but it is not an RFC 3161 timestamp.
+The inspect command reports certificate dates, but the Git signature isn't
+timestamped. An expired certificate doesn't automatically tell you when the Git
+signature was created.
 
-## Security and trust model
+## Hacking on it
 
-- Azure credentials and private keys are never written by this project.
-- The Artifact Signing private key remains managed by Azure.
-- The metadata file contains resource coordinates, not credentials.
-- The helper verifies the raw Artifact Signing signature against the returned leaf
-  certificate before returning an SSH signature to Git.
-- Git verification is SSH public-key verification; Git does not independently
-  validate the Artifact Signing X.509 chain.
-- Certificate receipts are local correlation records, not trusted timestamps.
-- Protect repository `.git` directories and metadata files from unauthorized
-  modification.
-
-## Development
-
-Windows PowerShell:
-
-```powershell
-go test ./...
-go vet ./...
-go build .\cmd\git-acs-sign
-```
-
-Linux Bash:
-
-```bash
+```text
 go test ./...
 go vet ./...
 go build ./cmd/git-acs-sign
 ```
+
+## License, because sharing is caring
+
+[MIT](LICENSE)
