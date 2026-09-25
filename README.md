@@ -135,6 +135,66 @@ export ACS_METADATA_PATH="$HOME/.config/git-acs-sign/metadata.json"
 Same deal as Windows: it builds the helper under `.git/artifact-signing`, tries
 a real signing operation, and configures the current repository.
 
+## Make GitHub show the green Verified badge
+
+Git can verify the signature locally right away, but GitHub doesn't know who
+owns the Artifact Signing public key yet. Upload it to your GitHub account as a
+**signing key**.
+
+### Windows
+
+```powershell
+$key = git config --local --path --get user.signingKey
+
+gh ssh-key add "$key" `
+    --type signing `
+    --title 'Azure Artifact Signing - git-acs-sign'
+```
+
+### Linux
+
+```bash
+key="$(git config --local --path --get user.signingKey)"
+
+gh ssh-key add "$key" \
+  --type signing \
+  --title "Azure Artifact Signing - git-acs-sign"
+```
+
+If GitHub CLI asks for another permission:
+
+```text
+gh auth refresh -h github.com -s admin:public_key
+```
+
+Then run the `gh ssh-key add` command again.
+
+Prefer clicking through the website? Open
+[GitHub SSH and GPG key settings](https://github.com/settings/keys), choose
+**New SSH key**, set the key type to **Signing Key**, and paste the contents of
+`signing-key.pub`.
+
+On Windows, this copies the key:
+
+```powershell
+$key = git config --local --path --get user.signingKey
+Get-Content $key | Set-Clipboard
+```
+
+On Linux:
+
+```bash
+key="$(git config --local --path --get user.signingKey)"
+cat "$key"
+```
+
+Also make sure the email used on your commits is verified in
+[GitHub email settings](https://github.com/settings/emails).
+
+Only the public key goes to GitHub. The private key stays in Azure. If Artifact
+Signing rotates to a new public key later, upload the new `signing-key.pub` as
+another signing key so new commits keep their Verified badge.
+
 ## Okay, let's sign something
 
 Make a small change and commit it normally:
