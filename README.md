@@ -14,6 +14,82 @@ The helper works on Windows and Linux. It supports:
 - inspection of the exact X.509 leaf certificate returned for a signed commit; and
 - local certificate receipts that are never added to source control.
 
+## Quick-start example
+
+The following example configures a repository, creates a signed commit, verifies
+the signature, and displays the certificate used to produce it.
+
+First, create a metadata file for an existing Artifact Signing certificate profile:
+
+```json
+{
+  "Endpoint": "https://scus.codesigning.azure.net",
+  "CodeSigningAccountName": "contoso-signing",
+  "CertificateProfileName": "public-trust-profile"
+}
+```
+
+Sign in to the Azure tenant that contains the Artifact Signing resource:
+
+```text
+az login --tenant <tenant-id>
+```
+
+### Windows example
+
+From the `git-acs-sign` repository:
+
+```powershell
+git config user.name 'Ada Lovelace'
+git config user.email 'ada@contoso.com'
+
+.\scripts\setup.ps1 `
+    -MetadataPath 'C:\Users\Ada\.config\git-acs-sign\metadata.json' `
+    -Principal 'ada@contoso.com'
+
+'Artifact Signing example' | Set-Content example.txt
+git add example.txt
+git commit -m 'Add signed example'
+
+git verify-commit --raw HEAD
+
+$signer = git config --local --get gpg.ssh.program
+& $signer inspect HEAD
+```
+
+### Linux example
+
+From the `git-acs-sign` repository:
+
+```bash
+git config user.name "Ada Lovelace"
+git config user.email "ada@contoso.com"
+
+chmod +x scripts/setup.sh
+./scripts/setup.sh \
+  "$HOME/.config/git-acs-sign/metadata.json" \
+  "ada@contoso.com"
+
+printf '%s\n' 'Artifact Signing example' > example.txt
+git add example.txt
+git commit -m 'Add signed example'
+
+git verify-commit --raw HEAD
+
+signer="$(git config --local --get gpg.ssh.program)"
+"$signer" inspect HEAD
+```
+
+Successful verification prints a result similar to:
+
+```text
+Good "git" signature for ada@contoso.com with RSA key SHA256:...
+```
+
+Certificate inspection then reports the commit ID, Artifact Signing account and
+profile, subject, issuer, serial number, SHA-256 thumbprint, validity period,
+public-key details, and key usages.
+
 ## How it works
 
 1. Git invokes `git-acs-sign` through `gpg.ssh.program`.
