@@ -1,6 +1,6 @@
 # Git commit signing with Azure Artifact Signing
 
-`git-acs-sign` adapts the unofficial
+`git-acs-sign` uses the
 [Artifact Signing SDK for Go](https://github.com/Jaxelr/artifact-signing-sdk-go)
 to Git's SSH signing interface. Git supplies the commit payload, `git-acs-sign`
 constructs an OpenSSH SSHSIG digest, and Azure Artifact Signing signs that digest
@@ -13,10 +13,6 @@ The helper works on Windows and Linux. It supports:
 - local verification of every Artifact Signing response before Git receives it;
 - inspection of the exact X.509 leaf certificate returned for a signed commit; and
 - local certificate receipts that are never added to source control.
-
-> [!IMPORTANT]
-> This project and `artifact-signing-sdk-go` are community projects, not official
-> Microsoft or Azure SDKs.
 
 ## How it works
 
