@@ -1,4 +1,4 @@
-module github.com/jaxelr/git-artifact-signing
+module github.com/jaxelr/git-azure-artifact-signing
 
 go 1.25.0
 

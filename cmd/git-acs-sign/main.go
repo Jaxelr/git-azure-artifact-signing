@@ -21,8 +21,8 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/jaxelr/artifact-signing-sdk-go/codesigning"
-	"github.com/jaxelr/git-artifact-signing/internal/config"
-	"github.com/jaxelr/git-artifact-signing/internal/sshsig"
+	"github.com/jaxelr/git-azure-artifact-signing/internal/config"
+	"github.com/jaxelr/git-azure-artifact-signing/internal/sshsig"
 	"golang.org/x/crypto/ssh"
 )
 
