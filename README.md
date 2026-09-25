@@ -24,7 +24,7 @@ First, create a metadata file for an existing Artifact Signing certificate profi
 ```json
 {
   "Endpoint": "https://scus.codesigning.azure.net",
-  "CodeSigningAccountName": "contoso-signing",
+  "CodeSigningAccountName": "codesign-account",
   "CertificateProfileName": "public-trust-profile"
 }
 ```
@@ -40,12 +40,12 @@ az login --tenant <tenant-id>
 From the `git-acs-sign` repository:
 
 ```powershell
-git config user.name 'Ada Lovelace'
-git config user.email 'ada@contoso.com'
+git config user.name 'Jaxel Rojas Lopez'
+git config user.email 'jrojaslopez@microsoft.com'
 
 .\scripts\setup.ps1 `
     -MetadataPath 'C:\Users\Ada\.config\git-acs-sign\metadata.json' `
-    -Principal 'ada@contoso.com'
+    -Principal 'jrojaslopez@microsoft.com'
 
 'Artifact Signing example' | Set-Content example.txt
 git add example.txt
@@ -62,13 +62,13 @@ $signer = git config --local --get gpg.ssh.program
 From the `git-acs-sign` repository:
 
 ```bash
-git config user.name "Ada Lovelace"
-git config user.email "ada@contoso.com"
+git config user.name "Jaxel Rojas Lopez"
+git config user.email "jrojaslopez@microsoft.com"
 
 chmod +x scripts/setup.sh
 ./scripts/setup.sh \
   "$HOME/.config/git-acs-sign/metadata.json" \
-  "ada@contoso.com"
+  "jrojaslopez@microsoft.com"
 
 printf '%s\n' 'Artifact Signing example' > example.txt
 git add example.txt
@@ -83,7 +83,7 @@ signer="$(git config --local --get gpg.ssh.program)"
 Successful verification prints a result similar to:
 
 ```text
-Good "git" signature for ada@contoso.com with RSA key SHA256:...
+Good "git" signature for jrojaslopez@microsoft.com with RSA key SHA256:...
 ```
 
 Certificate inspection then reports the commit ID, Artifact Signing account and
@@ -179,8 +179,8 @@ Set the name and email that should appear on commits. The same email is used as
 the default SSH signing principal:
 
 ```text
-git config user.name "Your Name"
-git config user.email "you@example.com"
+git config user.name "Jaxel Rojas Lopez"
+git config user.email "jrojaslopez@microsoft.com"
 ```
 
 Omit `--global` to configure only the current repository. Add `--global` if the
@@ -193,7 +193,7 @@ From the root of this repository, use the PowerShell setup script:
 ```powershell
 .\scripts\setup.ps1 `
     -MetadataPath 'C:\tools\AcsUnitTest\metadata.scus.json' `
-    -Principal 'you@example.com'
+    -Principal 'jrojaslopez@microsoft.com'
 ```
 
 The script builds the helper into `.git\artifact-signing`, validates Azure access,
@@ -204,7 +204,7 @@ If the PowerShell execution policy blocks the script:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 `
     -MetadataPath 'C:\tools\AcsUnitTest\metadata.scus.json' `
-    -Principal 'you@example.com'
+    -Principal 'jrojaslopez@microsoft.com'
 ```
 
 ### Configure another repository on Windows
@@ -222,7 +222,7 @@ Then change to the target repository and configure it:
 Set-Location 'C:\src\target-repository'
 & $signer setup `
     --metadata 'C:\tools\AcsUnitTest\metadata.scus.json' `
-    --principal 'you@example.com' `
+    --principal 'jrojaslopez@microsoft.com' `
     --program $signer
 ```
 
@@ -239,14 +239,14 @@ Run it from the root of this repository:
 ```bash
 ./scripts/setup.sh \
   "$HOME/.config/git-acs-sign/metadata.json" \
-  "you@example.com"
+  "jrojaslopez@microsoft.com"
 ```
 
 The metadata path can alternatively come from `ACS_METADATA_PATH`:
 
 ```bash
 export ACS_METADATA_PATH="$HOME/.config/git-acs-sign/metadata.json"
-./scripts/setup.sh "$ACS_METADATA_PATH" "you@example.com"
+./scripts/setup.sh "$ACS_METADATA_PATH" "jrojaslopez@microsoft.com"
 ```
 
 ### Configure another repository on Linux
@@ -265,7 +265,7 @@ Then change to the target repository and configure it:
 cd ~/src/target-repository
 "$signer" setup \
   --metadata "$HOME/.config/git-acs-sign/metadata.json" \
-  --principal "you@example.com" \
+  --principal "jrojaslopez@microsoft.com" \
   --program "$signer"
 ```
 
@@ -341,7 +341,7 @@ echo $?
 A valid signature produces output similar to:
 
 ```text
-Good "git" signature for you@example.com with RSA key SHA256:...
+Good "git" signature for jrojaslopez@microsoft.com with RSA key SHA256:...
 ```
 
 and exits with status `0`.
@@ -451,7 +451,7 @@ Windows:
 ```powershell
 .\scripts\setup.ps1 `
     -MetadataPath 'C:\tools\AcsUnitTest\metadata.scus.json' `
-    -Principal 'you@example.com'
+    -Principal 'jrojaslopez@microsoft.com'
 ```
 
 Linux:
@@ -459,7 +459,7 @@ Linux:
 ```bash
 ./scripts/setup.sh \
   "$HOME/.config/git-acs-sign/metadata.json" \
-  "you@example.com"
+  "jrojaslopez@microsoft.com"
 ```
 
 ## Troubleshooting
