@@ -55,6 +55,11 @@ certificate profile. Put them in a JSON file:
 Nothing secret is hiding in here. This file doesn't contain credentials or a
 private key; it just points at your Artifact Signing resource.
 
+> [!NOTE]
+> Your Azure identity still needs permission to use the signing profile. Check
+> out [Tutorial: Assign roles in Artifact Signing](https://learn.microsoft.com/en-us/azure/artifact-signing/tutorial-assign-roles)
+> if you need to wire that up.
+
 You can keep it wherever you like. Here are a couple of sensible spots:
 
 - Windows: `C:\Users\jaxel\.config\git-acs-sign\metadata.json`
