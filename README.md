@@ -1,5 +1,9 @@
 # Sign Git commits with Azure Artifact Signing
 
+> [!IMPORTANT]
+> This project is still in alpha and its considered an experiment on
+> limitations on the integration of Azure Artifact Signing with Git.
+    
 Hey, so you want to sign Git commits with a key that lives in Azure? Cool.
 
 `git-acs-sign` is a small helper that uses
@@ -60,18 +64,12 @@ private key; it just points at your Artifact Signing resource.
 > out [Tutorial: Assign roles in Artifact Signing](https://learn.microsoft.com/en-us/azure/artifact-signing/tutorial-assign-roles)
 > if you need to wire that up.
 
-You can keep it wherever you like. Here are a couple of sensible spots:
+You can keep it wherever you like. Usually kept under your home directory:
 
 - Windows: `C:\Users\jaxel\.config\git-acs-sign\metadata.json`
 - Linux: `$HOME/.config/git-acs-sign/metadata.json`
 
-On Linux, you can limit access to the file:
-
-```bash
-chmod 600 "$HOME/.config/git-acs-sign/metadata.json"
-```
-
-## Log in to Azure real quick
+## Log in to Azure
 
 For local use, an Azure CLI login does the trick:
 
@@ -80,9 +78,9 @@ az login --tenant <tenant-id>
 az account show
 ```
 
-The helper uses `DefaultAzureCredential`, so it'll pick up that Azure CLI login.
+The helper uses `DefaultAzureCredential`, so it'll pick up the Azure CLI login.
 
-## Windows folks, start here
+## Windows:
 
 Clone this repository, open PowerShell in it, and configure your Git identity:
 
@@ -111,7 +109,7 @@ The script builds the helper under `.git\artifact-signing`, makes sure Azure
 actually lets you sign, and wires up this repository so commits are signed
 automatically.
 
-## Linux folks, you're up
+## Linux:
 
 Clone this repository, open a shell in it, and configure your Git identity:
 
@@ -140,7 +138,7 @@ export ACS_METADATA_PATH="$HOME/.config/git-acs-sign/metadata.json"
 Same deal as Windows: it builds the helper under `.git/artifact-signing`, tries
 a real signing operation, and configures the current repository.
 
-## Make GitHub show the green Verified badge
+## Make GitHub show the Verified badge
 
 Git can verify the signature locally right away, but GitHub doesn't know who
 owns the Artifact Signing public key yet. Upload it to your GitHub account as a
@@ -399,26 +397,7 @@ Setup also creates:
 
 Everything lives under `.git`, safely out of your normal commits.
 
-## A tiny bit of nerdy detail
-
-Here's the whole signing flow without turning this into a cryptography textbook:
-
-1. Git gives `git-acs-sign` the commit data.
-2. The helper builds the SSH signature digest.
-3. Artifact Signing signs that digest.
-4. The helper checks the returned signature against the returned certificate.
-5. Git gets a normal SSH signature and stores it in the commit.
-
-The important bit: the private key stays in Azure. This project never downloads
-or writes it.
-
-Git verifies the SSH key in the commit. It doesn't validate the full X.509
-certificate chain. The local receipt is what ties that SSH signature back to the
-certificate returned during signing.
-
-Receipts are useful evidence, but they aren't RFC 3161 timestamps.
-
-## When things get weird
+## Troubleshooting
 
 ### Git says signing failed
 
@@ -465,20 +444,6 @@ receipt support. You can still check the Git signature:
 git verify-commit --raw <commit>
 ```
 
-### The certificate is expired
-
-The inspect command reports certificate dates, but the Git signature isn't
-timestamped. An expired certificate doesn't automatically tell you when the Git
-signature was created.
-
-## Hacking on it
-
-```text
-go test ./...
-go vet ./...
-go build ./cmd/git-acs-sign
-```
-
-## License, because sharing is caring
+## License
 
 [MIT](LICENSE)
