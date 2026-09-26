@@ -317,6 +317,23 @@ Install the helper straight from GitHub:
 go install github.com/jaxelr/git-azure-artifact-signing/cmd/git-acs-sign@latest
 ```
 
+Don't have Go installed on the machine where you want to use it? Grab a
+prebuilt Windows or Linux package from
+[GitHub Releases](https://github.com/Jaxelr/git-azure-artifact-signing/releases).
+Each archive comes with a `.sha256` checksum file.
+
+The repository also builds packages for every push and pull request. Open the
+run under the
+[Actions tab](https://github.com/Jaxelr/git-azure-artifact-signing/actions/workflows/build-and-package.yml)
+and download the artifact for your platform:
+
+- `git-acs-sign_linux_amd64`
+- `git-acs-sign_linux_arm64`
+- `git-acs-sign_windows_amd64`
+- `git-acs-sign_windows_arm64`
+
+Tagged versions such as `v0.1.0` are published to GitHub Releases automatically.
+
 ### Windows
 
 ```powershell
