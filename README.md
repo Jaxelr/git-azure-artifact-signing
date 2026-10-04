@@ -1,14 +1,14 @@
-# Sign Git commits with Azure Artifact Signing
+# Sign Git commits with Artifact Signing
 
 > [!IMPORTANT]
 > This project is still in alpha and its considered an experiment on
-> limitations on the integration of Azure Artifact Signing with Git.
+> limitations on the integration of Artifact Signing with Git.
     
 Hey, so you want to sign Git commits with a key that lives in Azure? Cool.
 
 `git-acs-sign` is a small helper that uses
 [Artifact Signing SDK for Go](https://github.com/Jaxelr/artifact-signing-sdk-go)
-to sign commits with Azure Artifact Signing.
+to sign commits with Artifact Signing.
 
 It plugs into Git's SSH signing support, which means you keep using Git like
 you normally would:
@@ -151,7 +151,7 @@ $key = git config --local --path --get user.signingKey
 
 gh ssh-key add "$key" `
     --type signing `
-    --title 'Azure Artifact Signing - git-acs-sign'
+    --title 'Artifact Signing - git-acs-sign'
 ```
 
 ### Linux
@@ -161,7 +161,7 @@ key="$(git config --local --path --get user.signingKey)"
 
 gh ssh-key add "$key" \
   --type signing \
-  --title "Azure Artifact Signing - git-acs-sign"
+  --title "Artifact Signing - git-acs-sign"
 ```
 
 If GitHub CLI asks for another permission:
