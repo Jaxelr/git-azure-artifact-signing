@@ -221,6 +221,24 @@ git commit -m 'Add signed example'
 Setup turns on `commit.gpgSign`, so that's it—no need to remember `-S` every
 time.
 
+New signatures also get an RFC 3161 timestamp from
+`http://timestamp.acs.microsoft.com`, using SHA-256, matching the defaults in
+[Artifact Signing action](https://github.com/Azure/artifact-signing-action).
+The timestamp covers the raw RSA signature, not the commit's author or
+committer dates. The helper verifies the timestamp's message imprint, TSA
+signature and certificate chain against the machine's trusted roots, and checks
+that its time falls within the signing certificate's validity period.
+Signing and setup fail if timestamping or verification fails; there is no
+untimestamped fallback.
+
+The timestamp response and signing certificate are embedded in SSHSIG's
+reserved field, so they travel with the commit. This is a helper-specific
+extension: OpenSSH ignores that field, and ordinary Git verification does not
+validate the timestamp. Use `git-acs-sign inspect` to verify it. A GitHub
+**Verified** badge is not a timestamp verification result. The timestamp check
+does not perform certificate revocation checks or validate the Artifact Signing
+certificate's issuer chain.
+
 If you only want to sign some commits:
 
 ```text
@@ -270,8 +288,9 @@ Look for the `BEGIN SSH SIGNATURE` block.
 
 ## Show me the certificate
 
-This is the fun part. The helper keeps a local receipt for each signature, so
-you can look up the exact certificate Artifact Signing returned.
+The helper embeds the signing certificate and timestamp proof in new signatures
+and also keeps a local receipt for each signature. You can look up the exact
+certificate Artifact Signing returned and verify its timestamp.
 
 ### Windows
 
@@ -296,6 +315,7 @@ git-acs-sign inspect <commit>
 The output includes:
 
 - Artifact Signing account and profile
+- Verified RFC 3161 timestamp time, serial number, and policy for new signatures
 - Certificate subject and issuer
 - Serial number
 - SHA-256 thumbprint
@@ -309,8 +329,14 @@ Receipts live under `.git/artifact-signing/receipts`. They stay local and aren't
 committed.
 
 If you clone the repository on another machine, Git can still verify the commit
-as long as the signing key is trusted there. The certificate details need the
-matching receipt from the machine that created the signature.
+as long as the signing key is trusted there. For new signatures, `inspect` uses
+the embedded certificate and timestamp without requiring a local receipt. The
+machine must trust the TSA's root certificates. Account and profile details
+remain local and are shown only when a receipt is available.
+
+Older signatures remain verifiable by Git, but have no trusted timestamp.
+Inspecting their certificate still requires the matching local receipt. Existing
+commits are not modified or retroactively timestamped.
 
 ## Bring it to another repository
 
@@ -398,6 +424,14 @@ Setup also creates:
 Everything lives under `.git`, safely out of your normal commits.
 
 ## Troubleshooting
+
+### Timestamping fails
+
+Allow HTTP access to `timestamp.acs.microsoft.com` and make sure the machine's
+trusted root certificates are current. The helper uses this endpoint over HTTP
+like the Artifact Signing action; it verifies the signed RFC 3161 response
+cryptographically rather than trusting the transport. A failed request or an
+untrusted or invalid timestamp blocks signing.
 
 ### Git says signing failed
 
