@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -18,8 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/jaxelr/artifact-signing-sdk-go/codesigning"
 	"github.com/jaxelr/git-azure-artifact-signing/internal/config"
 	"github.com/jaxelr/git-azure-artifact-signing/internal/sshsig"
@@ -36,10 +33,11 @@ type repositorySettings struct {
 }
 
 type signingResult struct {
-	signature   []byte
-	publicKey   ssh.PublicKey
-	certificate *x509.Certificate
-	metadata    config.Metadata
+	signature    []byte
+	rawSignature []byte
+	publicKey    ssh.PublicKey
+	certificate  *x509.Certificate
+	metadata     config.Metadata
 }
 
 type certificateReceipt struct {
@@ -207,49 +205,42 @@ func sign(ctx context.Context, payload []byte, namespace, metadataPath string) (
 		return signingResult{}, err
 	}
 
-	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	signed, err := signArtifact(ctx, metadata, prepared)
 	if err != nil {
-		return signingResult{}, fmt.Errorf("create Azure credential: %w", err)
+		return signingResult{}, err
 	}
-	client, err := codesigning.NewCertificateProfileClient(metadata.Endpoint, credential, nil)
+	signed.metadata = metadata
+	roots, err := x509.SystemCertPool()
 	if err != nil {
-		return signingResult{}, fmt.Errorf("create Artifact Signing client: %w", err)
+		return signingResult{}, fmt.Errorf("load timestamp trust roots: %w", err)
 	}
-	poller, err := client.BeginSign(ctx, metadata.CodeSigningAccountName, metadata.CertificateProfileName, codesigning.SignRequest{
-		Digest:             prepared.Digest(),
-		SignatureAlgorithm: to.Ptr(codesigning.SignatureAlgorithmRS256),
-	}, nil)
-	if err != nil {
-		return signingResult{}, fmt.Errorf("start Artifact Signing operation: %w", err)
-	}
-	result, err := poller.PollUntilDone(ctx, nil)
-	if err != nil {
-		return signingResult{}, fmt.Errorf("complete Artifact Signing operation: %w", err)
-	}
-	if len(result.Signature) == 0 {
+	return timestampSignature(ctx, signed, codesigning.NewTimestampClient(codesigning.DefaultMicrosoftTSAURL, nil), roots)
+}
+
+func assembleSignature(prepared sshsig.Prepared, rawSignature, certificateBytes []byte) (signingResult, error) {
+	if len(rawSignature) == 0 {
 		return signingResult{}, errors.New("Artifact Signing returned an empty signature")
 	}
-	if len(result.SigningCertificate) == 0 {
+	if len(certificateBytes) == 0 {
 		return signingResult{}, errors.New("Artifact Signing returned no signing certificate")
 	}
-
-	certificate, err := sshsig.ParseCertificate(result.SigningCertificate)
+	certificate, err := sshsig.ParseCertificate(certificateBytes)
 	if err != nil {
 		return signingResult{}, fmt.Errorf("parse Artifact Signing response certificate: %w", err)
 	}
-	if err := sshsig.VerifyRS256(certificate.PublicKey, prepared.Digest(), result.Signature); err != nil {
+	if err := sshsig.VerifyRS256(certificate.PublicKey, prepared.Digest(), rawSignature); err != nil {
 		return signingResult{}, err
 	}
 
-	signature, publicKey, err := prepared.Finish(result.SigningCertificate, result.Signature)
+	signature, publicKey, err := prepared.Finish(certificateBytes, rawSignature)
 	if err != nil {
 		return signingResult{}, err
 	}
 	return signingResult{
-		signature:   signature,
-		publicKey:   publicKey,
-		certificate: certificate,
-		metadata:    metadata,
+		signature:    signature,
+		rawSignature: rawSignature,
+		publicKey:    publicKey,
+		certificate:  certificate,
 	}, nil
 }
 
@@ -317,182 +308,6 @@ func writeVerificationFiles(settings repositorySettings, result signingResult) e
 		return fmt.Errorf("write certificate receipt: %w", err)
 	}
 	return nil
-}
-
-func inspect(arguments []string) error {
-	revision := "HEAD"
-	if len(arguments) > 1 {
-		return errors.New("usage: git-acs-sign inspect [revision]")
-	}
-	if len(arguments) == 1 {
-		revision = arguments[0]
-	}
-
-	verify := exec.Command("git", "verify-commit", "--raw", revision)
-	verifyOutput, err := verify.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("verify commit %s: %w: %s", revision, err, strings.TrimSpace(string(verifyOutput)))
-	}
-
-	rawCommit, err := exec.Command("git", "cat-file", "commit", revision).Output()
-	if err != nil {
-		return fmt.Errorf("read commit %s: %w", revision, err)
-	}
-	signature, err := extractCommitSignature(rawCommit)
-	if err != nil {
-		return err
-	}
-	signatureHash := sha256.Sum256(signature)
-	signatureID := hex.EncodeToString(signatureHash[:])
-
-	keyPath, err := requiredGitConfig("artifactsigning.keyFile")
-	if err != nil {
-		return err
-	}
-	receiptPath := filepath.Join(filepath.Dir(keyPath), "receipts", signatureID+".json")
-	receiptData, err := os.ReadFile(receiptPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("no certificate receipt was recorded for %s; receipts are available for commits created after this feature was installed", revision)
-		}
-		return fmt.Errorf("read certificate receipt: %w", err)
-	}
-	var receipt certificateReceipt
-	if err := json.Unmarshal(receiptData, &receipt); err != nil {
-		return fmt.Errorf("parse certificate receipt: %w", err)
-	}
-	certificate, err := x509.ParseCertificate(receipt.CertificateDER)
-	if err != nil {
-		return fmt.Errorf("parse receipt certificate: %w", err)
-	}
-	publicKey, err := ssh.NewPublicKey(certificate.PublicKey)
-	if err != nil {
-		return fmt.Errorf("convert receipt certificate public key: %w", err)
-	}
-	if ssh.FingerprintSHA256(publicKey) != receipt.SSHKeyFingerprint {
-		return errors.New("certificate receipt fingerprint does not match its certificate")
-	}
-
-	commitID, err := gitOutput("rev-parse", revision+"^{commit}")
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Commit:                %s\n", commitID)
-	fmt.Printf("Verification:          valid Git SSH signature\n")
-	fmt.Printf("Receipt:               %s\n", receiptPath)
-	fmt.Printf("Recorded at:           %s\n", receipt.RecordedAt.Format(time.RFC3339))
-	fmt.Printf("Artifact endpoint:     %s\n", receipt.Endpoint)
-	fmt.Printf("Signing account:       %s\n", receipt.Account)
-	fmt.Printf("Certificate profile:   %s\n", receipt.Profile)
-	fmt.Printf("Subject:               %s\n", certificate.Subject)
-	fmt.Printf("Issuer:                %s\n", certificate.Issuer)
-	fmt.Printf("Serial number:         %s\n", strings.ToUpper(certificate.SerialNumber.Text(16)))
-	fmt.Printf("SHA-256 thumbprint:    %s\n", certificateThumbprint(certificate))
-	fmt.Printf("SSH key fingerprint:   %s\n", receipt.SSHKeyFingerprint)
-	fmt.Printf("Valid from:            %s\n", certificate.NotBefore.Format(time.RFC3339))
-	fmt.Printf("Valid until:           %s\n", certificate.NotAfter.Format(time.RFC3339))
-	fmt.Printf("Public key algorithm:  %s%s\n", certificate.PublicKeyAlgorithm, publicKeyDetails(certificate))
-	fmt.Printf("Signature algorithm:   %s\n", certificate.SignatureAlgorithm)
-	fmt.Printf("Key usage:             %s\n", strings.Join(keyUsageNames(certificate.KeyUsage), ", "))
-	fmt.Printf("Extended key usage:    %s\n", strings.Join(extendedKeyUsageNames(certificate.ExtKeyUsage), ", "))
-	if len(certificate.UnknownExtKeyUsage) > 0 {
-		unknown := make([]string, 0, len(certificate.UnknownExtKeyUsage))
-		for _, oid := range certificate.UnknownExtKeyUsage {
-			unknown = append(unknown, oid.String())
-		}
-		fmt.Printf("Other extended usage:  %s\n", strings.Join(unknown, ", "))
-	}
-	return nil
-}
-
-func extractCommitSignature(rawCommit []byte) ([]byte, error) {
-	lines := strings.Split(strings.ReplaceAll(string(rawCommit), "\r\n", "\n"), "\n")
-	for index, line := range lines {
-		if !strings.HasPrefix(line, "gpgsig ") {
-			continue
-		}
-		var signature strings.Builder
-		signature.WriteString(strings.TrimPrefix(line, "gpgsig "))
-		signature.WriteByte('\n')
-		for index++; index < len(lines) && strings.HasPrefix(lines[index], " "); index++ {
-			signature.WriteString(strings.TrimPrefix(lines[index], " "))
-			signature.WriteByte('\n')
-		}
-		return []byte(signature.String()), nil
-	}
-	return nil, errors.New("commit does not contain a signature")
-}
-
-func certificateThumbprint(certificate *x509.Certificate) string {
-	sum := sha256.Sum256(certificate.Raw)
-	encoded := strings.ToUpper(hex.EncodeToString(sum[:]))
-	parts := make([]string, 0, len(encoded)/2)
-	for index := 0; index < len(encoded); index += 2 {
-		parts = append(parts, encoded[index:index+2])
-	}
-	return strings.Join(parts, ":")
-}
-
-func publicKeyDetails(certificate *x509.Certificate) string {
-	if key, ok := certificate.PublicKey.(*rsa.PublicKey); ok {
-		return fmt.Sprintf(" (%d bits)", key.N.BitLen())
-	}
-	return ""
-}
-
-func keyUsageNames(usage x509.KeyUsage) []string {
-	names := []struct {
-		value x509.KeyUsage
-		name  string
-	}{
-		{x509.KeyUsageDigitalSignature, "Digital Signature"},
-		{x509.KeyUsageContentCommitment, "Content Commitment"},
-		{x509.KeyUsageKeyEncipherment, "Key Encipherment"},
-		{x509.KeyUsageDataEncipherment, "Data Encipherment"},
-		{x509.KeyUsageKeyAgreement, "Key Agreement"},
-		{x509.KeyUsageCertSign, "Certificate Signing"},
-		{x509.KeyUsageCRLSign, "CRL Signing"},
-		{x509.KeyUsageEncipherOnly, "Encipher Only"},
-		{x509.KeyUsageDecipherOnly, "Decipher Only"},
-	}
-	var result []string
-	for _, candidate := range names {
-		if usage&candidate.value != 0 {
-			result = append(result, candidate.name)
-		}
-	}
-	if len(result) == 0 {
-		return []string{"none"}
-	}
-	return result
-}
-
-func extendedKeyUsageNames(usages []x509.ExtKeyUsage) []string {
-	names := map[x509.ExtKeyUsage]string{
-		x509.ExtKeyUsageAny:                            "Any",
-		x509.ExtKeyUsageServerAuth:                     "Server Authentication",
-		x509.ExtKeyUsageClientAuth:                     "Client Authentication",
-		x509.ExtKeyUsageCodeSigning:                    "Code Signing",
-		x509.ExtKeyUsageEmailProtection:                "Email Protection",
-		x509.ExtKeyUsageTimeStamping:                   "Time Stamping",
-		x509.ExtKeyUsageOCSPSigning:                    "OCSP Signing",
-		x509.ExtKeyUsageMicrosoftServerGatedCrypto:     "Microsoft Server Gated Crypto",
-		x509.ExtKeyUsageNetscapeServerGatedCrypto:      "Netscape Server Gated Crypto",
-		x509.ExtKeyUsageMicrosoftCommercialCodeSigning: "Microsoft Commercial Code Signing",
-		x509.ExtKeyUsageMicrosoftKernelCodeSigning:     "Microsoft Kernel Code Signing",
-	}
-	result := make([]string, 0, len(usages))
-	for _, usage := range usages {
-		if name, ok := names[usage]; ok {
-			result = append(result, name)
-		} else {
-			result = append(result, fmt.Sprintf("unknown (%d)", usage))
-		}
-	}
-	if len(result) == 0 {
-		return []string{"none"}
-	}
-	return result
 }
 
 func requiredGitConfig(key string) (string, error) {
