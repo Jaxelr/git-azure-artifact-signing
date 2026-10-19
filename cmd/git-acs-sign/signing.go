@@ -53,10 +53,7 @@ func timestampSignature(ctx context.Context, result signingResult, client timest
 	if _, err := verifyTimestamp(response.RawToken, result.rawSignature, result.certificate, roots); err != nil {
 		return signingResult{}, err
 	}
-	result.signature, err = sshsig.AttachTimestamp(result.signature, result.certificate.Raw, response.RawToken)
-	if err != nil {
-		return signingResult{}, fmt.Errorf("embed timestamp in SSH signature: %w", err)
-	}
+	result.timestampResponse = response.RawToken
 	return result, nil
 }
 

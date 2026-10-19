@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/pem"
 	"errors"
 	"math/big"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/digitorus/timestamp"
 	"github.com/jaxelr/artifact-signing-sdk-go/codesigning"
 	"github.com/jaxelr/git-azure-artifact-signing/internal/sshsig"
+	"golang.org/x/crypto/ssh"
 )
 
 type timestampRequestFunc func(context.Context, []byte, *codesigning.TimestampOptions) (*codesigning.TimestampResult, error)
@@ -35,7 +37,8 @@ type timestampFixture struct {
 	roots       *x509.CertPool
 }
 
-func TestTimestampSignatureEmbedsVerifiedACSResponse(t *testing.T) {
+func TestTimestampSignatureKeepsVerifiedACSResponseSeparate(t *testing.T) {
+	// Arrange
 	signed := testSigningResult(t)
 	authority := newTimestampFixture(t)
 	var response []byte
@@ -46,16 +49,55 @@ func TestTimestampSignatureEmbedsVerifiedACSResponse(t *testing.T) {
 		response = authority.response(t, data)
 		return &codesigning.TimestampResult{RawToken: response}, nil
 	})
+	// Act
 	result, err := timestampSignature(context.Background(), signed, client, authority.roots)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Assert
 	evidence, err := sshsig.ReadTimestamp(result.signature)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evidence == nil || !bytes.Equal(evidence.TimestampResponse, response) || !bytes.Equal(evidence.Signature, signed.rawSignature) {
-		t.Fatalf("timestamped signature contains incorrect evidence: %+v", evidence)
+	if evidence != nil || !bytes.Equal(result.signature, signed.signature) || !bytes.Equal(result.timestampResponse, response) {
+		t.Fatal("timestamping changed the SSH signature or lost the detached timestamp")
+	}
+	assertStandardSSHSignature(t, result, []byte("commit payload"))
+}
+
+func assertStandardSSHSignature(t *testing.T, result signingResult, payload []byte) {
+	t.Helper()
+	block, _ := pem.Decode(result.signature)
+	if block == nil || len(block.Bytes) < 6 {
+		t.Fatal("invalid SSH signature armor")
+	}
+	var envelope struct {
+		Version       uint32
+		PublicKey     []byte
+		Namespace     string
+		Reserved      string
+		HashAlgorithm string
+		Signature     []byte
+	}
+	if err := ssh.Unmarshal(block.Bytes[6:], &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Reserved != "" {
+		t.Fatal("standard SSH signatures must have an empty reserved field")
+	}
+	digest := sha256.Sum256(payload)
+	data := append([]byte("SSHSIG"), ssh.Marshal(struct {
+		Namespace     string
+		Reserved      string
+		HashAlgorithm string
+		Digest        []byte
+	}{envelope.Namespace, envelope.Reserved, envelope.HashAlgorithm, digest[:]})...)
+	var signature ssh.Signature
+	if err := ssh.Unmarshal(envelope.Signature, &signature); err != nil {
+		t.Fatal(err)
+	}
+	if err := result.publicKey.Verify(data, &signature); err != nil {
+		t.Fatalf("strict SSH verification including reserved data failed: %v", err)
 	}
 }
 

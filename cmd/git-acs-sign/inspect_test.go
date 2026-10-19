@@ -16,6 +16,7 @@ import (
 )
 
 func TestTimestampedCommitVerificationAndInspection(t *testing.T) {
+	// Arrange
 	isolateInspection(t)
 	payload := inspectionCommitPayload(t)
 	signed := testSigningPayload(t, payload)
@@ -28,6 +29,8 @@ func TestTimestampedCommitVerificationAndInspection(t *testing.T) {
 		t.Fatal(err)
 	}
 	commitID := writeInspectionCommit(t, payload, result)
+	writeTestReceipt(t, result)
+	// Act
 	signature, verifiedID, err := verifiedCommitSignature(commitID)
 	if err != nil {
 		t.Fatal(err)
@@ -36,28 +39,128 @@ func TestTimestampedCommitVerificationAndInspection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verifiedID != commitID || details.timestamp == nil || details.receiptPath != "" {
-		t.Fatalf("commit verification/inspection lost its timestamp or required a local receipt: %s, %+v", verifiedID, details)
+	// Assert
+	if verifiedID != commitID || details.timestamp == nil || details.receiptPath == "" {
+		t.Fatalf("commit verification/inspection lost its detached timestamp receipt: %s, %+v", verifiedID, details)
 	}
 }
 
-func TestInspectTimestampWithoutLocalReceipt(t *testing.T) {
+func TestInspectLegacyEmbeddedTimestampWithoutLocalReceipt(t *testing.T) {
+	// Arrange
 	isolateInspection(t)
 	signed := testSigningResult(t)
 	authority := newTimestampFixture(t)
-	client := timestampRequestFunc(func(context.Context, []byte, *codesigning.TimestampOptions) (*codesigning.TimestampResult, error) {
-		return &codesigning.TimestampResult{RawToken: authority.response(t, signed.rawSignature)}, nil
-	})
-	result, err := timestampSignature(context.Background(), signed, client, authority.roots)
+	signature, err := sshsig.AttachTimestamp(signed.signature, signed.certificate.Raw, authority.response(t, signed.rawSignature))
 	if err != nil {
 		t.Fatal(err)
 	}
-	details, err := inspectSignature(result.signature, authority.roots)
+	// Act
+	details, err := inspectSignature(signature, authority.roots)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Assert
 	if details.timestamp == nil || details.receiptPath != "" || !bytes.Equal(details.certificate.Raw, signed.certificate.Raw) {
 		t.Fatalf("inspection did not recover the embedded certificate and timestamp without a receipt: %+v", details)
+	}
+}
+
+func TestDetachedReceiptExportImportAndInspection(t *testing.T) {
+	// Arrange
+	isolateInspection(t)
+	payload := inspectionCommitPayload(t)
+	signed := testSigningPayload(t, payload)
+	authority := newTimestampFixture(t)
+	signed.timestampResponse = authority.response(t, signed.rawSignature)
+	commitID := writeInspectionCommit(t, payload, signed)
+	writeTestReceipt(t, signed)
+	exportPath := filepath.Join(t.TempDir(), "timestamp-receipt.json")
+
+	// Act
+	if err := transferReceiptWithRoots("export-receipt", []string{exportPath, commitID}, x509.NewCertPool()); err == nil {
+		t.Fatal("export accepted an untrusted timestamp")
+	}
+	if err := transferReceiptWithRoots("export-receipt", []string{exportPath, commitID}, authority.roots); err != nil {
+		t.Fatal(err)
+	}
+	localPath, err := localReceiptPath(signed.signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(localPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitRun("config", "--unset", "artifactsigning.keyFile"); err != nil {
+		t.Fatal(err)
+	}
+	external, err := inspectSignatureFrom(signed.signature, authority.roots, exportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transferReceiptWithRoots("import-receipt", []string{exportPath, commitID}, authority.roots); err != nil {
+		t.Fatal(err)
+	}
+	imported, err := inspectSignature(signed.signature, authority.roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Assert
+	if external.timestamp == nil || imported.timestamp == nil || imported.receiptPath == "" ||
+		!bytes.Equal(imported.receipt.TimestampResponse, signed.timestampResponse) {
+		t.Fatal("export/import lost the independently verified timestamp")
+	}
+	if err := transferReceiptWithRoots("export-receipt", []string{exportPath, commitID}, authority.roots); err == nil {
+		t.Fatal("export overwrote an existing file")
+	}
+}
+
+func TestDetachedReceiptRejectsTampering(t *testing.T) {
+	// Arrange
+	isolateInspection(t)
+	payload := inspectionCommitPayload(t)
+	signed := testSigningPayload(t, payload)
+	commitID := writeInspectionCommit(t, payload, signed)
+	other := testSigningResult(t)
+	authority := newTimestampFixture(t)
+	tests := []struct {
+		name   string
+		result signingResult
+	}{
+		{"different signature receipt", signingResult{
+			signature: other.signature, publicKey: other.publicKey, certificate: other.certificate,
+			timestampResponse: authority.response(t, other.rawSignature),
+		}},
+		{"different certificate", signingResult{
+			signature: signed.signature, publicKey: other.publicKey, certificate: other.certificate,
+			timestampResponse: authority.response(t, other.rawSignature),
+		}},
+		{"different signature timestamp", signingResult{
+			signature: signed.signature, publicKey: signed.publicKey, certificate: signed.certificate,
+			timestampResponse: authority.response(t, other.rawSignature),
+		}},
+		{"invalid timestamp", signingResult{
+			signature: signed.signature, publicKey: signed.publicKey, certificate: signed.certificate,
+			timestampResponse: []byte("invalid"),
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			writeTestReceipt(t, test.result)
+			path, err := localReceiptPath(test.result.signature)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Act
+			_, inspectErr := inspectSignatureFrom(signed.signature, authority.roots, path)
+			importErr := transferReceiptWithRoots("import-receipt", []string{path, commitID}, authority.roots)
+
+			// Assert
+			if inspectErr == nil || importErr == nil {
+				t.Fatalf("tampered evidence was accepted: inspect=%v, import=%v", inspectErr, importErr)
+			}
+		})
 	}
 }
 

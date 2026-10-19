@@ -85,7 +85,24 @@ func envelopeTimestamp(envelope signatureEnvelope) (*TimestampEvidence, error) {
 	if evidence.Version != 1 || len(evidence.CertificateDER) == 0 || len(evidence.TimestampResponse) == 0 {
 		return nil, errors.New("unsupported or incomplete timestamp evidence")
 	}
-	certificate, err := ParseCertificate(evidence.CertificateDER)
+	raw, err := rawSignature(envelope, evidence.CertificateDER)
+	if err != nil {
+		return nil, err
+	}
+	evidence.Signature = raw
+	return &evidence, nil
+}
+
+func RawSignature(signature, certificateDER []byte) ([]byte, error) {
+	envelope, err := decodeEnvelope(signature)
+	if err != nil {
+		return nil, err
+	}
+	return rawSignature(envelope, certificateDER)
+}
+
+func rawSignature(envelope signatureEnvelope, certificateDER []byte) ([]byte, error) {
+	certificate, err := ParseCertificate(certificateDER)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +120,5 @@ func envelopeTimestamp(envelope signatureEnvelope) (*TimestampEvidence, error) {
 	if signature.Format != rsaSignatureFormat || len(signature.Blob) == 0 || len(signature.Rest) != 0 {
 		return nil, errors.New("unsupported timestamped RSA signature format")
 	}
-	evidence.Signature = signature.Blob
-	return &evidence, nil
+	return signature.Blob, nil
 }

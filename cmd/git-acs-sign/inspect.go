@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,9 +28,15 @@ type signatureInspection struct {
 }
 
 func inspect(arguments []string) error {
+	flags := flag.NewFlagSet("inspect", flag.ContinueOnError)
+	receiptPath := flags.String("receipt", "", "path to a shared certificate and timestamp receipt")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	arguments = flags.Args()
 	revision := "HEAD"
 	if len(arguments) > 1 {
-		return errors.New("usage: git-acs-sign inspect [revision]")
+		return errors.New("usage: git-acs-sign inspect [--receipt path] [revision]")
 	}
 	if len(arguments) == 1 {
 		revision = arguments[0]
@@ -42,7 +49,7 @@ func inspect(arguments []string) error {
 	if err != nil {
 		return fmt.Errorf("load timestamp trust roots: %w", err)
 	}
-	details, err := inspectSignature(signature, roots)
+	details, err := inspectSignatureFrom(signature, roots, *receiptPath)
 	if err != nil {
 		return err
 	}
@@ -68,11 +75,22 @@ func verifiedCommitSignature(revision string) ([]byte, string, error) {
 }
 
 func inspectSignature(signature []byte, roots *x509.CertPool) (signatureInspection, error) {
+	return inspectSignatureFrom(signature, roots, "")
+}
+
+func inspectSignatureFrom(signature []byte, roots *x509.CertPool, receiptPath string) (signatureInspection, error) {
 	evidence, err := sshsig.ReadTimestamp(signature)
 	if err != nil {
 		return signatureInspection{}, err
 	}
-	receipt, path, err := receiptForSignature(signature, evidence)
+	var receipt certificateReceipt
+	var path string
+	if receiptPath == "" {
+		receipt, path, err = receiptForSignature(signature, evidence)
+	} else {
+		path = receiptPath
+		receipt, err = readReceipt(signature, path)
+	}
 	if err != nil {
 		return signatureInspection{}, err
 	}
@@ -80,9 +98,23 @@ func inspectSignature(signature []byte, roots *x509.CertPool) (signatureInspecti
 	if err != nil {
 		return signatureInspection{}, err
 	}
+	rawSignature, err := sshsig.RawSignature(signature, receipt.CertificateDER)
+	if err != nil {
+		return signatureInspection{}, err
+	}
 	details := signatureInspection{receipt: receipt, receiptPath: path, certificate: certificate}
 	if evidence != nil {
-		details.timestamp, err = verifyTimestamp(evidence.TimestampResponse, evidence.Signature, certificate, roots)
+		if !bytes.Equal(receipt.CertificateDER, evidence.CertificateDER) {
+			return signatureInspection{}, errors.New("receipt certificate does not match the commit's embedded certificate")
+		}
+		if len(receipt.TimestampResponse) != 0 && !bytes.Equal(receipt.TimestampResponse, evidence.TimestampResponse) {
+			return signatureInspection{}, errors.New("receipt timestamp does not match the commit's embedded timestamp")
+		}
+		receipt.TimestampResponse = evidence.TimestampResponse
+		details.receipt = receipt
+	}
+	if len(receipt.TimestampResponse) != 0 {
+		details.timestamp, err = verifyTimestamp(receipt.TimestampResponse, rawSignature, certificate, roots)
 		if err != nil {
 			return signatureInspection{}, err
 		}
@@ -96,13 +128,10 @@ func receiptForSignature(signature []byte, evidence *sshsig.TimestampEvidence) (
 		return certificateReceipt{}, "", err
 	}
 	if receipt != nil {
-		if evidence != nil && !bytes.Equal(receipt.CertificateDER, evidence.CertificateDER) {
-			return certificateReceipt{}, "", errors.New("local receipt certificate does not match the commit's embedded certificate")
-		}
 		return *receipt, path, nil
 	}
 	if evidence == nil {
-		return certificateReceipt{}, "", errors.New("no certificate receipt was recorded for this legacy signature; its certificate is not embedded in the commit")
+		return certificateReceipt{}, "", errors.New("no certificate receipt is available; import a matching receipt or use inspect --receipt <path>")
 	}
 	certificate, err := x509.ParseCertificate(evidence.CertificateDER)
 	if err != nil {
@@ -113,34 +142,62 @@ func receiptForSignature(signature []byte, evidence *sshsig.TimestampEvidence) (
 		return certificateReceipt{}, "", fmt.Errorf("convert embedded signing certificate public key: %w", err)
 	}
 	return certificateReceipt{
+		SignatureSHA256:   signatureID(signature),
 		CertificateDER:    evidence.CertificateDER,
 		SSHKeyFingerprint: ssh.FingerprintSHA256(publicKey),
+		TimestampResponse: evidence.TimestampResponse,
 	}, "", nil
 }
 
 func readLocalReceipt(signature []byte) (*certificateReceipt, string, error) {
-	keyPath, err := optionalSigningKeyPath()
-	if err != nil || keyPath == "" {
+	path, err := localReceiptPath(signature)
+	if err != nil {
 		return nil, "", err
 	}
-	signatureHash := sha256.Sum256(signature)
-	signatureID := hex.EncodeToString(signatureHash[:])
-	path := filepath.Join(filepath.Dir(keyPath), "receipts", signatureID+".json")
-	data, err := os.ReadFile(path)
+	receipt, err := readReceipt(signature, path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, "", nil
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("read certificate receipt: %w", err)
+		return nil, "", err
+	}
+	return &receipt, path, nil
+}
+
+func signatureID(signature []byte) string {
+	hash := sha256.Sum256(signature)
+	return hex.EncodeToString(hash[:])
+}
+
+func localReceiptPath(signature []byte) (string, error) {
+	keyPath, err := optionalSigningKeyPath()
+	if err != nil {
+		return "", err
+	}
+	directory := filepath.Dir(keyPath)
+	if keyPath == "" {
+		gitDirectory, err := gitOutput("rev-parse", "--path-format=absolute", "--git-dir")
+		if err != nil {
+			return "", err
+		}
+		directory = filepath.Join(gitDirectory, "artifact-signing")
+	}
+	return filepath.Join(directory, "receipts", signatureID(signature)+".json"), nil
+}
+
+func readReceipt(signature []byte, path string) (certificateReceipt, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return certificateReceipt{}, fmt.Errorf("read certificate receipt %q: %w", path, err)
 	}
 	var receipt certificateReceipt
 	if err := json.Unmarshal(data, &receipt); err != nil {
-		return nil, "", fmt.Errorf("parse certificate receipt: %w", err)
+		return certificateReceipt{}, fmt.Errorf("parse certificate receipt: %w", err)
 	}
-	if receipt.SignatureSHA256 != signatureID {
-		return nil, "", errors.New("certificate receipt does not match the commit's signature")
+	if receipt.SignatureSHA256 != signatureID(signature) {
+		return certificateReceipt{}, errors.New("certificate receipt does not match the commit's signature")
 	}
-	return &receipt, path, nil
+	return receipt, nil
 }
 
 func optionalSigningKeyPath() (string, error) {
@@ -183,7 +240,7 @@ func printInspection(commitID string, details signatureInspection) {
 		fmt.Printf("Certificate profile:   %s\n", details.receipt.Profile)
 	}
 	if details.timestamp == nil {
-		fmt.Printf("Timestamp:             not recorded (legacy signature)\n")
+		fmt.Printf("Timestamp:             not recorded in receipt or signature\n")
 	} else {
 		fmt.Printf("Timestamp:             valid RFC 3161 proof with trusted TSA chain\n")
 		fmt.Printf("Timestamp time:        %s\n", details.timestamp.Time.Format(time.RFC3339Nano))

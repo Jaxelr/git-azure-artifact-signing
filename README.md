@@ -196,7 +196,8 @@ Also make sure the email used on your commits is verified in
 
 Only the public key goes to GitHub. The private key stays in Azure. If Artifact
 Signing rotates to a new public key later, upload the new `signing-key.pub` as
-another signing key so new commits keep their Verified badge.
+another signing key so new commits keep their Verified badge. GitHub trusts
+account-registered SSH keys, not the Artifact Signing certificate issuer chain.
 
 ## Okay, let's sign something
 
@@ -231,10 +232,10 @@ that its time falls within the signing certificate's validity period.
 Signing and setup fail if timestamping or verification fails; there is no
 untimestamped fallback.
 
-The timestamp response and signing certificate are embedded in SSHSIG's
-reserved field, so they travel with the commit. This is a helper-specific
-extension: OpenSSH ignores that field, and ordinary Git verification does not
-validate the timestamp. Use `git-acs-sign inspect` to verify it. A GitHub
+The timestamp response and signing certificate are saved in a separate local
+receipt. The SSH signature's reserved field stays empty for compatibility with
+GitHub. Git signature verification and timestamp verification are separate:
+use `git-acs-sign inspect` to verify the receipt's timestamp. A GitHub
 **Verified** badge is not a timestamp verification result. The timestamp check
 does not perform certificate revocation checks or validate the Artifact Signing
 certificate's issuer chain.
@@ -288,9 +289,9 @@ Look for the `BEGIN SSH SIGNATURE` block.
 
 ## Show me the certificate
 
-The helper embeds the signing certificate and timestamp proof in new signatures
-and also keeps a local receipt for each signature. You can look up the exact
-certificate Artifact Signing returned and verify its timestamp.
+The helper keeps the signing certificate and timestamp proof in a local receipt
+for each signature. You can look up the exact certificate Artifact Signing
+returned and verify its timestamp independently of GitHub.
 
 ### Windows
 
@@ -328,15 +329,43 @@ The output includes:
 Receipts live under `.git/artifact-signing/receipts`. They stay local and aren't
 committed.
 
-If you clone the repository on another machine, Git can still verify the commit
-as long as the signing key is trusted there. For new signatures, `inspect` uses
-the embedded certificate and timestamp without requiring a local receipt. The
-machine must trust the TSA's root certificates. Account and profile details
-remain local and are shown only when a receipt is available.
+To share timestamp evidence, export the matching receipt:
 
-Older signatures remain verifiable by Git, but have no trusted timestamp.
-Inspecting their certificate still requires the matching local receipt. Existing
-commits are not modified or retroactively timestamped.
+```text
+git-acs-sign export-receipt timestamp-receipt.json HEAD
+```
+
+Copy that file to the other machine. It contains public certificate and timestamp
+evidence, plus account/profile metadata, but no private keys or credentials.
+You can verify it directly without installing it locally:
+
+```text
+git-acs-sign inspect --receipt timestamp-receipt.json HEAD
+```
+
+Or import it for subsequent `inspect` calls:
+
+```text
+git-acs-sign import-receipt timestamp-receipt.json HEAD
+git-acs-sign inspect HEAD
+```
+
+Export/import default to `HEAD` when the revision is omitted. Export refuses to
+overwrite an existing file. Both commands verify the commit and timestamp before
+writing the receipt, and reject receipts without a timestamp. Import stores the
+receipt locally; it does not register or trust the signing key.
+
+If you clone the repository on another machine, Git can still verify the commit
+as long as the signing key is trusted there. Timestamp inspection additionally
+requires the matching receipt and trusted TSA roots. The verifier checks the
+receipt's signature hash, matches the certificate key to the commit's signing
+key, and verifies that the timestamp covers that signature.
+
+Older embedded timestamps remain readable by `inspect` and can be exported as
+receipts, but those signatures may remain Unverified on GitHub. Older receipts
+without timestamps still support certificate inspection and explicitly report
+that no timestamp was recorded. Existing commits are not modified or
+retroactively timestamped; correcting an embedded signature changes its commit ID.
 
 ## Bring it to another repository
 
@@ -472,7 +501,10 @@ Rerun setup with the right principal if they don't match.
 ### `inspect` can't find a receipt
 
 The receipt may have been created on another machine, or the commit may predate
-receipt support. You can still check the Git signature:
+receipt support. Use `inspect --receipt <path> <commit>` or
+`import-receipt <path> <commit>` if you have the matching receipt.
+Without it, you can still check the Git signature, but cannot verify the detached
+timestamp:
 
 ```text
 git verify-commit --raw <commit>

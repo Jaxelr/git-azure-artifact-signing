@@ -33,11 +33,12 @@ type repositorySettings struct {
 }
 
 type signingResult struct {
-	signature    []byte
-	rawSignature []byte
-	publicKey    ssh.PublicKey
-	certificate  *x509.Certificate
-	metadata     config.Metadata
+	signature         []byte
+	rawSignature      []byte
+	publicKey         ssh.PublicKey
+	certificate       *x509.Certificate
+	metadata          config.Metadata
+	timestampResponse []byte
 }
 
 type certificateReceipt struct {
@@ -48,6 +49,7 @@ type certificateReceipt struct {
 	Account           string    `json:"account"`
 	Profile           string    `json:"profile"`
 	CertificateDER    []byte    `json:"certificateDer"`
+	TimestampResponse []byte    `json:"timestampResponse,omitempty"`
 }
 
 func main() {
@@ -63,6 +65,9 @@ func run(arguments []string) error {
 	}
 	if len(arguments) > 0 && arguments[0] == "inspect" {
 		return inspect(arguments[1:])
+	}
+	if len(arguments) > 0 && (arguments[0] == "export-receipt" || arguments[0] == "import-receipt") {
+		return transferReceipt(arguments[0], arguments[1:])
 	}
 
 	operation := argumentValue(arguments, "-Y")
@@ -294,6 +299,7 @@ func writeVerificationFiles(settings repositorySettings, result signingResult) e
 		Account:           result.metadata.CodeSigningAccountName,
 		Profile:           result.metadata.CertificateProfileName,
 		CertificateDER:    result.certificate.Raw,
+		TimestampResponse: result.timestampResponse,
 	}
 	receiptData, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
